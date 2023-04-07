@@ -210,6 +210,8 @@ struct suniv_dma {
     struct suniv_dma_chan   chan[SUNIV_DMA_MAX_CHANNELS];
     u32                     nr_channels;
 
+    struct tasklet_struct       task;
+
     struct suniv_dma_prompt     prompts;
 
     /* for dev attr */
@@ -565,8 +567,10 @@ static void suniv_dma_set_chn_config(struct suniv_dma_chan *schan,
     // suniv_dma_reg_dump(schan);
 }
 
-static void suniv_dma_start(struct suniv_dma_chan *chan)
+// static void suniv_dma_start(struct suniv_dma_chan *chan);
+static void suniv_dma_start(unsigned long data)
 {
+    struct suniv_dma_chan *chan = (struct suniv_dma_chan *)data;
     struct suniv_dma *dma_dev = to_suniv_dma_by_sdc(chan);
     struct suniv_dma_prompt *prompt, *n;
     // struct virt_dma_desc *vdesc;
@@ -697,13 +701,16 @@ static enum dma_status suniv_dma_tx_status(struct dma_chan *chan,
 
 static void suniv_dma_issue_pending(struct dma_chan *c)
 {
+    struct suniv_dma *dma_dev = to_suniv_dma_by_dc(c);
     struct suniv_dma_chan *chan = to_suniv_dma_chan(c);
     unsigned long flags;
 
-    spin_lock_irqsave(&chan->vchan.lock, flags);
     printk("%s\n", __func__);
-    if (vchan_issue_pending(&chan->vchan) && chan->desc)
-        suniv_dma_start(chan);
+    spin_lock_irqsave(&chan->vchan.lock, flags);
+    if (vchan_issue_pending(&chan->vchan) && chan->desc) {
+        dma_dev->task.data = (unsigned long)chan;
+        tasklet_schedule(&dma_dev->task);
+    }
     spin_unlock_irqrestore(&chan->vchan.lock, flags);
 }
 
@@ -923,6 +930,8 @@ static int suniv_dma_probe(struct platform_device *pdev)
     /* Initialize locks */
     spin_lock_init(&dma_dev->lock);
     mutex_init(&dma_dev->mutex);
+
+    tasklet_init(&dma_dev->task, suniv_dma_start, (unsigned long)0);
 
     /* Acquire clocks */
     dma_dev->hclk = devm_clk_get(&pdev->dev, "ahb");
